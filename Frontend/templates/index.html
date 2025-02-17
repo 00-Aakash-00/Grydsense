@@ -1,0 +1,205 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8"/>
+  <title>Grydsense AI Assistant</title>
+  <link rel="stylesheet" href="{{ url_for('static', filename='style.css') }}"/>
+  <!-- For Markdown parsing and sanitization -->
+  <script src="https://cdn.jsdelivr.net/npm/marked/marked.min.js"></script>
+  <script src="https://cdn.jsdelivr.net/npm/dompurify@2.4.0/dist/purify.min.js"></script>
+</head>
+
+<body>
+  <div class="chat-container">
+    <div class="chat-header">
+      <!-- Dropdown for dataset selection -->
+      <select id="dataset-select">
+        <option value="meetAndConnect" selected>Meet & Connect</option>
+        <option value="primaryWorkDeskData">Primary Work Desk</option>
+      </select>
+      <h2 id="chat-title">Grydsense: Meet & Connect</h2>
+    </div>
+
+    <!-- Recommended queries bar -->
+    <div id="recommended-bar" class="recommended-bar"></div>
+
+    <div id="chat-window" class="chat-window"></div>
+
+    <div class="input-container">
+      <input type="text" id="user-input" placeholder="Ask a question..." autofocus/>
+      <button id="send-btn">Send</button>
+    </div>
+  </div>
+
+  <!-- Modal for image zoom -->
+  <div id="image-modal" class="modal">
+    <span class="modal-close" id="modal-close">&times;</span>
+    <img class="modal-content" id="modal-img"/>
+  </div>
+
+  <script>
+    // HTML Elements
+    const chatWindow = document.getElementById("chat-window");
+    const userInput = document.getElementById("user-input");
+    const sendBtn = document.getElementById("send-btn");
+    const recommendedBar = document.getElementById("recommended-bar");
+    const datasetSelect = document.getElementById("dataset-select");
+    const chatTitle = document.getElementById("chat-title");
+
+    // Modal elements
+    const modal = document.getElementById("image-modal");
+    const modalImg = document.getElementById("modal-img");
+    const modalClose = document.getElementById("modal-close");
+
+    modalClose.onclick = () => { modal.style.display = "none"; };
+    window.onclick = (event) => {
+      if (event.target == modal) {
+        modal.style.display = "none";
+      }
+    };
+
+    // On page load, fetch recommended queries for the default dataset
+    window.onload = function() {
+      loadRecommendedQueries();
+    };
+
+    // Dataset dropdown logic
+    datasetSelect.addEventListener("change", () => {
+      // Clear the chat
+      chatWindow.innerHTML = "";
+
+      // Update the title
+      if (datasetSelect.value === "meetAndConnect") {
+        chatTitle.textContent = "Grydsense: Meet & Connect";
+      } else {
+        chatTitle.textContent = "Grydsense: Primary Desk";
+      }
+      // Fetch new recommended queries
+      loadRecommendedQueries();
+    });
+
+    sendBtn.addEventListener("click", sendMessage);
+    userInput.addEventListener("keypress", function(e) {
+      if (e.key === 'Enter') {
+        sendMessage();
+      }
+    });
+
+    function addMessageToChat(content, sender="user", isImage=false) {
+      const messageDiv = document.createElement("div");
+      messageDiv.classList.add("message", sender);
+
+      if (isImage) {
+        // It's a base64 image
+        const imageEl = document.createElement("img");
+        imageEl.src = `data:image/png;base64,${content}`;
+        imageEl.classList.add("chat-image");
+        // Zoom on click
+        imageEl.onclick = () => {
+          modalImg.src = imageEl.src;
+          modal.style.display = "block";
+        };
+        messageDiv.appendChild(imageEl);
+      } else {
+        // Render Markdown
+        const rawHTML = marked.parse(content);
+        const cleanHTML = DOMPurify.sanitize(rawHTML);
+        messageDiv.innerHTML = cleanHTML;
+      }
+
+      chatWindow.appendChild(messageDiv);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function showLoadingIndicator() {
+      const loadingDiv = document.createElement("div");
+      loadingDiv.classList.add("message", "assistant");
+      loadingDiv.id = "loading-indicator";
+      loadingDiv.textContent = "...";
+      chatWindow.appendChild(loadingDiv);
+      chatWindow.scrollTop = chatWindow.scrollHeight;
+    }
+
+    function hideLoadingIndicator() {
+      const loadingDiv = document.getElementById("loading-indicator");
+      if (loadingDiv) {
+        chatWindow.removeChild(loadingDiv);
+      }
+    }
+
+    function sendMessage() {
+      const messageText = userInput.value.trim();
+      if (!messageText) return;
+
+      // Add user message
+      addMessageToChat(messageText, "user");
+      userInput.value = "";
+
+      // Show ...
+      showLoadingIndicator();
+
+      // Prepare data for /send_message
+      const formData = new FormData();
+      formData.append("message", messageText);
+      formData.append("dataset_type", datasetSelect.value);
+
+      fetch("/send_message", {
+        method: "POST",
+        body: formData
+      })
+      .then(response => response.json())
+      .then(data => {
+        hideLoadingIndicator();
+
+        if (data.status === "success") {
+          let aiText = data.response_text || "";
+          let aiImage = data.response_image || null;
+
+          if (aiText) {
+            addMessageToChat(aiText, "assistant");
+          }
+          if (aiImage) {
+            addMessageToChat(aiImage, "assistant", true);
+          }
+        } else {
+          addMessageToChat("Error: " + data.message, "assistant");
+        }
+      })
+      .catch(err => {
+        hideLoadingIndicator();
+        addMessageToChat("An error occurred: " + err, "assistant");
+      });
+    }
+
+    function loadRecommendedQueries() {
+      const dataset = datasetSelect.value; // "meetAndConnect" or "primaryWorkDeskData"
+      // We'll call /get_recommended_queries with the dataset
+      fetch("/get_recommended_queries", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ dataset_type: dataset })
+      })
+      .then(r => r.json())
+      .then(data => {
+        recommendedBar.innerHTML = "";
+        const queries = data.queries || [];
+
+        queries.forEach(q => {
+          const chip = document.createElement("div");
+          chip.classList.add("query-chip");
+          chip.textContent = q;
+          chip.onclick = () => {
+            userInput.value = q;
+            userInput.focus();
+          };
+          recommendedBar.appendChild(chip);
+        });
+      })
+      .catch(err => {
+        console.error("Error fetching recommended queries:", err);
+        recommendedBar.innerHTML = "<span style='color:red;'>Failed to load recommended queries</span>";
+      });
+    }
+  </script>
+</body>
+</html>
